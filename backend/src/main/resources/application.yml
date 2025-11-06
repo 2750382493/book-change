@@ -1,0 +1,23 @@
+server:
+  port: 8080
+  servlet:
+    context-path: /api
+
+spring:
+  data:
+    mongodb:
+      uri: mongodb://localhost:27017/campus_book_trading
+      auto-index-creation: true
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 10MB
+
+app:
+  jwt-secret: campusBookTradingSecretKey2024ThatIsVerySecureAndLongEnoughForJWT
+  jwt-expiration-ms: 86400000
+  upload-dir: ./uploads/
+
+logging:
+  level:
+    com.campus.book: DEBUG
