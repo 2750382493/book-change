@@ -6,6 +6,7 @@ import BookList from '../views/BookList.vue'
 import BookDetail from '../views/BookDetail.vue'
 import UserProfile from '../views/UserProfile.vue'
 import Messages from '../views/Messages.vue'
+import Needs from '../views/Needs.vue' 
 
 const routes = [
   { path: '/', name: 'Home', component: Home },
@@ -14,7 +15,8 @@ const routes = [
   { path: '/books', name: 'BookList', component: BookList },
   { path: '/books/:id', name: 'BookDetail', component: BookDetail },
   { path: '/profile', name: 'UserProfile', component: UserProfile },
-  { path: '/messages', name: 'Messages', component: Messages }
+  { path: '/messages', name: 'Messages', component: Messages },
+  { path: '/needs', name: 'Needs', component: Needs } 
 ]
 
 const router = createRouter({

@@ -8,8 +8,11 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
+
+// 添加缺失的导入
 import java.io.File;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -84,10 +87,29 @@ public class BookController {
         }
     }
 
-    // 测试接口
-    @GetMapping("/test")
-    public ResponseEntity<String> testEndpoint() {
-        return ResponseEntity.ok("书籍接口正常工作");
+    // 测试图片上传功能
+    @GetMapping("/test-upload")
+    public ResponseEntity<String> testUpload() {
+        try {
+            // 创建测试目录
+            String uploadDir = "uploads/";
+            File dir = new File(uploadDir);
+            if (!dir.exists()) {
+                boolean created = dir.mkdirs();
+                if (!created) {
+                    return ResponseEntity.status(500).body("无法创建上传目录");
+                }
+            }
+
+            // 检查目录权限
+            if (!dir.canWrite()) {
+                return ResponseEntity.status(500).body("上传目录没有写入权限");
+            }
+
+            return ResponseEntity.ok("上传目录正常: " + dir.getAbsolutePath());
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body("上传目录检查失败: " + e.getMessage());
+        }
     }
 
     @PostMapping("/upload-image/{bookId}")
@@ -99,31 +121,49 @@ public class BookController {
                 return ResponseEntity.badRequest().body("书籍不存在");
             }
 
-            // 创建上传目录
-            String uploadDir = "./uploads/";
+            // 创建上传目录 - 使用相对路径
+            String uploadDir = "uploads/";
             File dir = new File(uploadDir);
             if (!dir.exists()) {
-                dir.mkdirs();
+                boolean created = dir.mkdirs();
+                if (!created) {
+                    return ResponseEntity.status(500).body("无法创建上传目录");
+                }
             }
 
             // 生成唯一文件名
-            String filename = System.currentTimeMillis() + "_" + file.getOriginalFilename();
+            String originalFilename = file.getOriginalFilename();
+            String fileExtension = "";
+            if (originalFilename != null && originalFilename.contains(".")) {
+                fileExtension = originalFilename.substring(originalFilename.lastIndexOf("."));
+            }
+            String filename = System.currentTimeMillis() + fileExtension;
             String filepath = uploadDir + filename;
 
             // 保存文件
             File dest = new File(filepath);
             file.transferTo(dest);
 
-            // 更新书籍图片信息
+            // 更新书籍图片信息 - 使用相对路径
             Book book = bookOpt.get();
             String imageUrl = "/uploads/" + filename;
+            if (book.getImages() == null) {
+                book.setImages(new ArrayList<>());
+            }
             book.getImages().add(imageUrl);
-            bookService.saveBook(book);
+            Book savedBook = bookService.saveBook(book);
+
+            System.out.println("图片保存成功: " + filepath);
+            System.out.println("图片访问URL: " + imageUrl);
+            System.out.println("书籍图片列表: " + savedBook.getImages());
 
             return ResponseEntity.ok(imageUrl);
         } catch (IOException e) {
             e.printStackTrace();
             return ResponseEntity.status(500).body("文件上传失败: " + e.getMessage());
+        } catch (Exception e) {
+            e.printStackTrace();
+            return ResponseEntity.status(500).body("服务器内部错误: " + e.getMessage());
         }
     }
 

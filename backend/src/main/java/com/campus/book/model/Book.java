@@ -3,8 +3,10 @@ package com.campus.book.model;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.mapping.Document;
 import org.springframework.data.mongodb.core.mapping.DBRef;
-import java.util.Date;
+
+// 添加导入
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.List;
 
 @Document(collection = "books")
@@ -21,7 +23,7 @@ public class Book {
     private Double originalPrice;
     private String category;
     private String condition = "良好";
-    private List<String> images = new ArrayList<>();
+    private List<String> images = new ArrayList<>(); // 确保正确初始化
 
     @DBRef
     private User seller;
@@ -34,10 +36,10 @@ public class Book {
         this.createTime = new Date();
         this.updateTime = new Date();
         this.sold = false;
-        this.images = new ArrayList<>();
+        this.images = new ArrayList<>(); // 在构造器中再次确保初始化
     }
 
-    // Getter和Setter方法
+    // Getter和Setter方法保持不变...
     public String getId() { return id; }
     public void setId(String id) { this.id = id; }
 
@@ -68,7 +70,12 @@ public class Book {
     public String getCondition() { return condition; }
     public void setCondition(String condition) { this.condition = condition; }
 
-    public List<String> getImages() { return images; }
+    public List<String> getImages() {
+        if (images == null) {
+            images = new ArrayList<>();
+        }
+        return images;
+    }
     public void setImages(List<String> images) { this.images = images; }
 
     public User getSeller() { return seller; }
@@ -91,6 +98,7 @@ public class Book {
                 ", author='" + author + '\'' +
                 ", price=" + price +
                 ", category='" + category + '\'' +
+                ", images=" + images +
                 ", seller=" + (seller != null ? seller.getId() : "null") +
                 '}';
     }

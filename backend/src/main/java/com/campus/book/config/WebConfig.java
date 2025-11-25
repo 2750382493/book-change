@@ -17,7 +17,13 @@ public class WebConfig implements WebMvcConfigurer {
 
     @Override
     public void addResourceHandlers(ResourceHandlerRegistry registry) {
+        // 映射uploads目录到静态资源
         registry.addResourceHandler("/uploads/**")
-                .addResourceLocations("file:./uploads/");
+                .addResourceLocations("file:./uploads/")
+                .setCachePeriod(3600);
+
+        // 添加默认静态资源映射
+        registry.addResourceHandler("/**")
+                .addResourceLocations("classpath:/static/", "classpath:/public/");
     }
 }
