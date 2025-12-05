@@ -1,512 +1,161 @@
 package com.campus.book.service;
 
-import io.jsonwebtoken.*;
-import io.jsonwebtoken.io.Decoders;
-import io.jsonwebtoken.io.Encoders;
-import io.jsonwebtoken.security.Keys;
-import io.jsonwebtoken.security.SecurityException;
-import lombok.RequiredArgsConstructor;
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.Jwts;
+import io.jsonwebtoken.SignatureAlgorithm;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import org.springframework.util.StringUtils;
 
-import javax.crypto.SecretKey;
-import java.time.Duration;
-import java.time.Instant;
-import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.function.Function;
 
+/**
+ * JWT (JSON Web Token) 服务类
+ * <p>
+ * 提供 JWT 令牌的生成、解析、验证以及从令牌中提取用户信息的功能。
+ * 本服务采用 HMAC SHA256 算法进行签名，确保令牌在传输过程中的不可篡改性。
+ * </p>
+ *
+ * @author YourName
+ */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class JwtService {
 
-    private static final String TOKEN_TYPE_CLAIM = "typ";
-    private static final String TOKEN_TYPE = "JWT";
-    private static final String ISSUER_CLAIM = "iss";
-    private static final String AUDIENCE_CLAIM = "aud";
-    private static final String JTI_CLAIM = "jti";
-    private static final String ROLES_CLAIM = "roles";
-    private static final String PERMISSIONS_CLAIM = "perms";
+    // 从配置文件读取密钥，若不存在则使用默认值（仅供开发测试）
+    @Value("${jwt.secret:MySuperSecretKeyForCampusBookSystem2023}")
+    private String secretKey;
 
-    @Value("${app.jwt.secret}")
-    private String jwtSecret;
-
-    @Value("${app.jwt.expiration:86400}") // 默认24小时（秒）
-    private long jwtExpirationSeconds;
-
-    @Value("${app.jwt.refresh-expiration:2592000}") // 默认30天（秒）
-    private long refreshTokenExpirationSeconds;
-
-    @Value("${app.jwt.issuer:campus-book-service}")
-    private String issuer;
-
-    @Value("${app.jwt.audience:campus-book-client}")
-    private String audience;
-
-    // 令牌黑名单（简易内存实现，生产环境用Redis）
-    private final Set<String> tokenBlacklist = Collections.newSetFromMap(new ConcurrentHashMap<>());
-    // 刷新令牌存储（简易内存实现）
-    private final Map<String, RefreshTokenInfo> refreshTokenStore = new ConcurrentHashMap<>();
+    // Token 有效期：24小时 (毫秒)
+    private static final long EXPIRATION_TIME = 1000 * 60 * 60 * 24;
 
     /**
-     * 获取签名密钥
+     * 根据用户名生成 Token
+     *
+     * @param username 用户名
+     * @return 加密后的 JWT 字符串
      */
-    private SecretKey getSigningKey() {
-        try {
-            // 支持Base64编码的密钥
-            if (isBase64Encoded(jwtSecret)) {
-                byte[] keyBytes = Decoders.BASE64.decode(jwtSecret);
-                return Keys.hmacShaKeyFor(keyBytes);
-            }
-
-            // 普通字符串密钥，确保长度足够
-            byte[] keyBytes = jwtSecret.getBytes();
-            if (keyBytes.length < 32) {
-                log.warn("JWT密钥长度不足256位，建议使用更长的密钥或Base64编码的密钥");
-                // 填充到32字节
-                byte[] paddedKey = new byte[32];
-                System.arraycopy(keyBytes, 0, paddedKey, 0, Math.min(keyBytes.length, 32));
-                return Keys.hmacShaKeyFor(paddedKey);
-            }
-
-            return Keys.hmacShaKeyFor(keyBytes);
-        } catch (Exception e) {
-            log.error("JWT密钥初始化失败", e);
-            throw new JwtConfigurationException("JWT密钥配置错误", e);
-        }
+    public String generateToken(String username) {
+        log.debug("开始为用户生成 Token: {}", username);
+        Map<String, Object> claims = new HashMap<>();
+        // 可以在这里添加额外的 payload 信息，例如用户角色
+        claims.put("role", "USER");
+        claims.put("platform", "WEB");
+        
+        return createToken(claims, username);
     }
 
     /**
-     * 生成访问令牌
+     * 创建 Token 的具体实现
+     *
+     * @param claims 数据声明
+     * @param subject 主题（通常是用户名）
+     * @return Token 字符串
      */
-    public String generateAccessToken(String username, List<String> roles, List<String> permissions) {
-        return generateToken(username, roles, permissions, jwtExpirationSeconds, TokenType.ACCESS);
-    }
+    private String createToken(Map<String, Object> claims, String subject) {
+        Date now = new Date(System.currentTimeMillis());
+        Date expiration = new Date(System.currentTimeMillis() + EXPIRATION_TIME);
 
-    /**
-     * 生成刷新令牌
-     */
-    public String generateRefreshToken(String username, List<String> roles) {
-        String refreshToken = generateToken(username, roles, Collections.emptyList(),
-                refreshTokenExpirationSeconds, TokenType.REFRESH);
-
-        // 存储刷新令牌信息
-        RefreshTokenInfo tokenInfo = RefreshTokenInfo.builder()
-                .username(username)
-                .issuedAt(Instant.now())
-                .expiresAt(Instant.now().plusSeconds(refreshTokenExpirationSeconds))
-                .roles(roles)
-                .build();
-
-        refreshTokenStore.put(refreshToken, tokenInfo);
-        return refreshToken;
-    }
-
-    /**
-     * 通用令牌生成方法
-     */
-    private String generateToken(String subject, List<String> roles, List<String> permissions,
-                                 long expirationSeconds, TokenType tokenType) {
-        if (!StringUtils.hasText(subject)) {
-            throw new IllegalArgumentException("令牌主题（用户名）不能为空");
-        }
-
-        Instant now = Instant.now();
-        Instant expiration = now.plusSeconds(expirationSeconds);
-
-        String tokenId = UUID.randomUUID().toString();
-
-        JwtBuilder builder = Jwts.builder()
-                .setId(tokenId)
+        return Jwts.builder()
+                .setClaims(claims)
                 .setSubject(subject)
-                .setIssuer(issuer)
-                .setAudience(audience)
-                .setIssuedAt(Date.from(now))
-                .setExpiration(Date.from(expiration))
-                .claim(TOKEN_TYPE_CLAIM, tokenType.getValue())
-                .signWith(getSigningKey(), SignatureAlgorithm.HS256);
-
-        // 添加自定义声明
-        if (roles != null && !roles.isEmpty()) {
-            builder.claim(ROLES_CLAIM, roles);
-        }
-
-        if (permissions != null && !permissions.isEmpty()) {
-            builder.claim(PERMISSIONS_CLAIM, permissions);
-        }
-
-        String token = builder.compact();
-        log.debug("生成{}令牌，用户: {}, 有效期: {}秒", tokenType, subject, expirationSeconds);
-
-        return token;
+                .setIssuedAt(now)
+                .setExpiration(expiration)
+                .signWith(SignatureAlgorithm.HS256, secretKey)
+                .compact();
     }
 
     /**
-     * 刷新访问令牌
+     * 从 Token 中验证并提取用户名
+     *
+     * @param token JWT 令牌
+     * @return 用户名
      */
-    public TokenPair refreshTokens(String refreshToken) {
-        if (!validateToken(refreshToken)) {
-            throw new InvalidTokenException("刷新令牌无效");
-        }
-
-        // 验证是否为刷新令牌
-        if (!isRefreshToken(refreshToken)) {
-            throw new InvalidTokenException("提供的令牌不是刷新令牌");
-        }
-
-        // 检查刷新令牌是否在存储中
-        RefreshTokenInfo tokenInfo = refreshTokenStore.get(refreshToken);
-        if (tokenInfo == null || tokenInfo.isExpired()) {
-            refreshTokenStore.remove(refreshToken);
-            throw new InvalidTokenException("刷新令牌已过期或无效");
-        }
-
-        String username = getUsernameFromToken(refreshToken);
-        List<String> roles = getRolesFromToken(refreshToken);
-        List<String> permissions = getPermissionsFromToken(refreshToken);
-
-        // 生成新的令牌对
-        String newAccessToken = generateAccessToken(username, roles, permissions);
-        String newRefreshToken = generateRefreshToken(username, roles);
-
-        // 使旧刷新令牌失效
-        revokeRefreshToken(refreshToken);
-
-        return TokenPair.builder()
-                .accessToken(newAccessToken)
-                .refreshToken(newRefreshToken)
-                .tokenType("Bearer")
-                .expiresIn(jwtExpirationSeconds)
-                .build();
+    public String extractUsername(String token) {
+        return extractClaim(token, Claims::getSubject);
     }
 
     /**
-     * 从令牌中提取用户名
+     * 从 Token 中提取过期时间
+     *
+     * @param token JWT 令牌
+     * @return 过期时间
      */
-    public String getUsernameFromToken(String token) {
-        return getClaimsFromToken(token).getSubject();
+    public Date extractExpiration(String token) {
+        return extractClaim(token, Claims::getExpiration);
     }
 
     /**
-     * 从令牌中提取角色
+     * 泛型方法：提取 Token 中的特定信息
+     *
+     * @param token 令牌
+     * @param claimsResolver 处理 Claims 的函数
+     * @param <T> 返回类型
+     * @return 提取的数据
      */
-    @SuppressWarnings("unchecked")
-    public List<String> getRolesFromToken(String token) {
-        Claims claims = getClaimsFromToken(token);
-        Object rolesObj = claims.get(ROLES_CLAIM);
-
-        if (rolesObj instanceof List) {
-            return (List<String>) rolesObj;
-        }
-        return Collections.emptyList();
+    public <T> T extractClaim(String token, Function<Claims, T> claimsResolver) {
+        final Claims claims = extractAllClaims(token);
+        return claimsResolver.apply(claims);
     }
 
     /**
-     * 从令牌中提取权限
+     * 解析 Token 获取所有的 Claims
+     * <p>
+     * 此过程会验证签名，如果签名无效或 Token 格式错误，将抛出异常。
+     * </p>
+     *
+     * @param token 令牌
+     * @return Claims 对象
      */
-    @SuppressWarnings("unchecked")
-    public List<String> getPermissionsFromToken(String token) {
-        Claims claims = getClaimsFromToken(token);
-        Object permsObj = claims.get(PERMISSIONS_CLAIM);
-
-        if (permsObj instanceof List) {
-            return (List<String>) permsObj;
-        }
-        return Collections.emptyList();
-    }
-
-    /**
-     * 获取令牌过期时间
-     */
-    public Instant getExpirationFromToken(String token) {
-        return getClaimsFromToken(token).getExpiration().toInstant();
-    }
-
-    /**
-     * 获取令牌签发时间
-     */
-    public Instant getIssuedAtFromToken(String token) {
-        return getClaimsFromToken(token).getIssuedAt().toInstant();
-    }
-
-    /**
-     * 获取令牌剩余有效期（秒）
-     */
-    public long getRemainingValiditySeconds(String token) {
+    private Claims extractAllClaims(String token) {
         try {
-            Instant expiration = getExpirationFromToken(token);
-            return Duration.between(Instant.now(), expiration).getSeconds();
-        } catch (Exception e) {
-            return 0;
-        }
-    }
-
-    /**
-     * 验证令牌
-     */
-    public boolean validateToken(String token) {
-        if (!StringUtils.hasText(token) || isTokenRevoked(token)) {
-            return false;
-        }
-
-        try {
-            Jwts.parserBuilder()
-                    .setSigningKey(getSigningKey())
-                    .requireIssuer(issuer)
-                    .requireAudience(audience)
-                    .build()
-                    .parseClaimsJws(token);
-            return true;
-        } catch (ExpiredJwtException e) {
-            log.debug("令牌已过期: {}", e.getMessage());
-            return false;
-        } catch (UnsupportedJwtException e) {
-            log.warn("不支持的JWT令牌: {}", e.getMessage());
-            return false;
-        } catch (MalformedJwtException e) {
-            log.warn("JWT令牌格式错误: {}", e.getMessage());
-            return false;
-        } catch (SecurityException e) {
-            log.warn("JWT签名验证失败: {}", e.getMessage());
-            return false;
-        } catch (IllegalArgumentException e) {
-            log.warn("JWT令牌参数错误: {}", e.getMessage());
-            return false;
-        } catch (JwtException e) {
-            log.warn("JWT令牌验证失败: {}", e.getMessage());
-            return false;
-        }
-    }
-
-    /**
-     * 验证令牌并返回声明（不抛出异常）
-     */
-    public Optional<Claims> validateTokenQuietly(String token) {
-        try {
-            Claims claims = getClaimsFromToken(token);
-            return Optional.of(claims);
-        } catch (JwtException e) {
-            return Optional.empty();
-        }
-    }
-
-    /**
-     * 检查是否为访问令牌
-     */
-    public boolean isAccessToken(String token) {
-        try {
-            String tokenType = getClaimsFromToken(token).get(TOKEN_TYPE_CLAIM, String.class);
-            return TokenType.ACCESS.getValue().equals(tokenType);
-        } catch (JwtException e) {
-            return false;
-        }
-    }
-
-    /**
-     * 检查是否为刷新令牌
-     */
-    public boolean isRefreshToken(String token) {
-        try {
-            String tokenType = getClaimsFromToken(token).get(TOKEN_TYPE_CLAIM, String.class);
-            return TokenType.REFRESH.getValue().equals(tokenType);
-        } catch (JwtException e) {
-            return false;
-        }
-    }
-
-    /**
-     * 撤销令牌（加入黑名单）
-     */
-    public void revokeToken(String token) {
-        if (StringUtils.hasText(token)) {
-            tokenBlacklist.add(token);
-            log.debug("令牌已撤销: {}", getTokenPreview(token));
-        }
-    }
-
-    /**
-     * 撤销刷新令牌
-     */
-    public void revokeRefreshToken(String refreshToken) {
-        if (StringUtils.hasText(refreshToken)) {
-            refreshTokenStore.remove(refreshToken);
-            revokeToken(refreshToken);
-            log.debug("刷新令牌已撤销: {}", getTokenPreview(refreshToken));
-        }
-    }
-
-    /**
-     * 批量撤销令牌
-     */
-    public void revokeTokens(List<String> tokens) {
-        tokens.forEach(this::revokeToken);
-    }
-
-    /**
-     * 清理过期令牌黑名单
-     */
-    public void cleanExpiredBlacklist() {
-        int initialSize = tokenBlacklist.size();
-        tokenBlacklist.removeIf(this::isTokenExpired);
-        log.debug("清理令牌黑名单，移除{}个过期令牌", initialSize - tokenBlacklist.size());
-    }
-
-    /**
-     * 清理过期刷新令牌
-     */
-    public void cleanExpiredRefreshTokens() {
-        int initialSize = refreshTokenStore.size();
-        refreshTokenStore.entrySet().removeIf(entry -> entry.getValue().isExpired());
-        log.debug("清理刷新令牌，移除{}个过期令牌", initialSize - refreshTokenStore.size());
-    }
-
-    /**
-     * 获取令牌统计信息
-     */
-    public TokenStatistics getTokenStatistics() {
-        return TokenStatistics.builder()
-                .activeRefreshTokens(refreshTokenStore.size())
-                .blacklistedTokens(tokenBlacklist.size())
-                .build();
-    }
-
-    /**
-     * 生成密钥对（开发工具方法）
-     */
-    public static SecretKey generateSecretKey() {
-        return Keys.secretKeyFor(SignatureAlgorithm.HS256);
-    }
-
-    /**
-     * 生成Base64编码的密钥（开发工具方法）
-     */
-    public static String generateBase64SecretKey() {
-        SecretKey key = generateSecretKey();
-        return Encoders.BASE64.encode(key.getEncoded());
-    }
-
-    // ============ 私有方法 ============
-
-    private Claims getClaimsFromToken(String token) {
-        try {
-            return Jwts.parserBuilder()
-                    .setSigningKey(getSigningKey())
-                    .build()
+            return Jwts.parser()
+                    .setSigningKey(secretKey)
                     .parseClaimsJws(token)
                     .getBody();
-        } catch (ExpiredJwtException e) {
-            throw new TokenExpiredException("令牌已过期", e);
-        } catch (JwtException e) {
-            throw new InvalidTokenException("令牌无效: " + e.getMessage(), e);
-        }
-    }
-
-    private boolean isTokenRevoked(String token) {
-        return tokenBlacklist.contains(token);
-    }
-
-    private boolean isTokenExpired(String token) {
-        try {
-            Instant expiration = getExpirationFromToken(token);
-            return Instant.now().isAfter(expiration);
-        } catch (JwtException e) {
-            return true;
-        }
-    }
-
-    private boolean isBase64Encoded(String str) {
-        try {
-            Decoders.BASE64.decode(str);
-            return true;
         } catch (Exception e) {
+            log.error("Token 解析失败: {}", e.getMessage());
+            throw new RuntimeException("无效的身份认证令牌");
+        }
+    }
+
+    /**
+     * 验证 Token 是否有效
+     *
+     * @param token 令牌
+     * @param username 待验证的用户名
+     * @return true 如果有效
+     */
+    public Boolean validateToken(String token, String username) {
+        try {
+            final String extractedUsername = extractUsername(token);
+            boolean isUsernameMatch = extractedUsername.equals(username);
+            boolean isTokenExpired = isTokenExpired(token);
+            
+            if (!isUsernameMatch) {
+                log.warn("Token 验证失败：用户名不匹配 (Expected: {}, Actual: {})", username, extractedUsername);
+            }
+            if (isTokenExpired) {
+                log.warn("Token 验证失败：令牌已过期");
+            }
+            
+            return (isUsernameMatch && !isTokenExpired);
+        } catch (Exception e) {
+            log.error("Token 验证过程中发生错误: {}", e.getMessage());
             return false;
         }
     }
 
-    private String getTokenPreview(String token) {
-        if (token.length() <= 20) {
-            return token;
-        }
-        return token.substring(0, 10) + "..." + token.substring(token.length() - 10);
-    }
-
-    // ============ 内部类和枚举 ============
-
-    public enum TokenType {
-        ACCESS("access"),
-        REFRESH("refresh");
-
-        private final String value;
-
-        TokenType(String value) {
-            this.value = value;
-        }
-
-        public String getValue() {
-            return value;
-        }
-    }
-
-    @lombok.Data
-    @lombok.Builder
-    public static class RefreshTokenInfo {
-        private String username;
-        private Instant issuedAt;
-        private Instant expiresAt;
-        private List<String> roles;
-
-        public boolean isExpired() {
-            return Instant.now().isAfter(expiresAt);
-        }
-    }
-
-    @lombok.Data
-    @lombok.Builder
-    public static class TokenPair {
-        private String accessToken;
-        private String refreshToken;
-        private String tokenType;
-        private long expiresIn;
-    }
-
-    @lombok.Data
-    @lombok.Builder
-    public static class TokenStatistics {
-        private int activeRefreshTokens;
-        private int blacklistedTokens;
-    }
-
-    // ============ 自定义异常 ============
-
-    public static class JwtConfigurationException extends RuntimeException {
-        public JwtConfigurationException(String message) {
-            super(message);
-        }
-
-        public JwtConfigurationException(String message, Throwable cause) {
-            super(message, cause);
-        }
-    }
-
-    public static class InvalidTokenException extends RuntimeException {
-        public InvalidTokenException(String message) {
-            super(message);
-        }
-
-        public InvalidTokenException(String message, Throwable cause) {
-            super(message, cause);
-        }
-    }
-
-    public static class TokenExpiredException extends InvalidTokenException {
-        public TokenExpiredException(String message) {
-            super(message);
-        }
-
-        public TokenExpiredException(String message, Throwable cause) {
-            super(message, cause);
-        }
+    /**
+     * 检查 Token 是否过期
+     *
+     * @param token 令牌
+     * @return true 如果已过期
+     */
+    private Boolean isTokenExpired(String token) {
+        return extractExpiration(token).before(new Date());
     }
 }
