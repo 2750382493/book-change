@@ -4,16 +4,23 @@ import com.campus.book.model.Need;
 import com.campus.book.model.User;
 import com.campus.book.service.NeedService;
 import com.campus.book.service.UserService;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import java.util.List;
 import java.util.Optional;
 
+/**
+ * 需求管理控制器
+ * 处理求书需求的发布、查询与状态管理
+ */
+@Slf4j
 @RestController
 @RequestMapping("/needs")
 @CrossOrigin(origins = "*")
 public class NeedController {
+    
     @Autowired
     private NeedService needService;
     
@@ -38,13 +45,17 @@ public class NeedController {
     @GetMapping("/{id}")
     public ResponseEntity<Need> getNeedById(@PathVariable String id) {
         Optional<Need> need = needService.getNeedById(id);
-        return need.map(ResponseEntity::ok).orElse(ResponseEntity.notFound().build());
+        return need.map(ResponseEntity::ok)
+                   .orElse(ResponseEntity.notFound().build());
     }
 
+    /**
+     * 发布求书需求
+     */
     @PostMapping
     public ResponseEntity<?> createNeed(@RequestBody NeedRequest request) {
         try {
-            System.out.println("接收到创建需求请求: " + request);
+            log.info("接收到创建需求请求: {}", request.getTitle());
             
             if (request.getTitle() == null || request.getUserId() == null) {
                 return ResponseEntity.badRequest().body("缺少必要参数: title, userId");
@@ -65,12 +76,10 @@ public class NeedController {
             need.setUser(user.get());
             
             Need savedNeed = needService.saveNeed(need);
-            System.out.println("需求创建成功, ID: " + savedNeed.getId());
             return ResponseEntity.ok(savedNeed);
             
         } catch (Exception e) {
-            System.err.println("创建需求异常: " + e.getMessage());
-            e.printStackTrace();
+            log.error("创建需求异常", e);
             return ResponseEntity.status(500).body("服务器内部错误: " + e.getMessage());
         }
     }
@@ -81,6 +90,7 @@ public class NeedController {
             Need need = needService.markAsFulfilled(id);
             return ResponseEntity.ok(need);
         } catch (Exception e) {
+            log.error("标记需求完成失败", e);
             return ResponseEntity.notFound().build();
         }
     }
@@ -95,6 +105,7 @@ public class NeedController {
         }
     }
 
+    // DTO
     public static class NeedRequest {
         private String title;
         private String author;
@@ -104,37 +115,20 @@ public class NeedController {
         private String category;
         private String userId;
         
-        // Getter和Setter
+        // Getters and Setters...
         public String getTitle() { return title; }
         public void setTitle(String title) { this.title = title; }
-        
         public String getAuthor() { return author; }
         public void setAuthor(String author) { this.author = author; }
-        
         public String getIsbn() { return isbn; }
         public void setIsbn(String isbn) { this.isbn = isbn; }
-        
         public String getDescription() { return description; }
         public void setDescription(String description) { this.description = description; }
-        
         public Double getMaxPrice() { return maxPrice; }
         public void setMaxPrice(Double maxPrice) { this.maxPrice = maxPrice; }
-        
         public String getCategory() { return category; }
         public void setCategory(String category) { this.category = category; }
-        
         public String getUserId() { return userId; }
         public void setUserId(String userId) { this.userId = userId; }
-        
-        @Override
-        public String toString() {
-            return "NeedRequest{" +
-                    "title='" + title + '\'' +
-                    ", author='" + author + '\'' +
-                    ", maxPrice=" + maxPrice +
-                    ", category='" + category + '\'' +
-                    ", userId='" + userId + '\'' +
-                    '}';
-        }
     }
 }
